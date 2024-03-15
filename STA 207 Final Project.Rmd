@@ -136,8 +136,6 @@ Additionally, students in comparison schools were also assigned identification n
 
 The study employed a within-school design to minimize variation in student achievement that could be attributed to school-specific factors. This ensured that each class type (small, regular, and regular + aide) within a school shared common elements such as students, curriculum, and administration, enhancing the internal validity by controlling for school effects. Moreover, within each school, the assignment of students and teachers to each class type was completely random, ensuring that there would be no basis for the argument that higher-performing students or teachers were placed within particular class types in order to skew the results of the study. 
 
-The project was initially implemented with the goal of being a longitudinal study
-
 ## Experimental Design of Project STAR
 
 Researchers employed ANOVA procedures to answer the major questions of the study which we previously listed. Data were aggregated to the level of class means.
@@ -342,7 +340,7 @@ ggplot(g1_black_and_white[!is.na(g1_black_and_white$g1freelunch),],
        aes(x = g1freelunch, y = g1tmathss, fill = race)) +
   geom_boxplot() +
   facet_wrap(~race) +
-  labs(title = "Test Scores by Race and Location Type",
+  labs(title = "Test Scores by Race and Lunch Status",
        x = "Race",
        y = "Test Score") +
   scale_fill_brewer(palette = "Set2") +
@@ -817,9 +815,7 @@ We begin our sensitivity analysis through subjective analysis of various diagnos
 
 ```{r, echo = FALSE}
 
-grid.arrange(p1, p2, ncol = 2)
-
-p1 = plot(student_level_model, which = 1)
+plot(student_level_model, which = 1)
 
 ```
 

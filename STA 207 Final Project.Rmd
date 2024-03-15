@@ -1,0 +1,909 @@
+---
+title: "The Relationship Between Class Size and Test Scores: An Analysis of the Project STAR Dataset"
+author: "Patrick Bacon"
+date: "3-14-2024"
+output:
+  html_document:
+    df_print: paged
+    number_sections: yes
+---
+```{r results = 'hide', error = FALSE, warning = FALSE, message = FALSE, echo = FALSE}
+library(foreign)
+library(car)
+library(AER)
+library(tidyverse)
+
+data('STAR')
+
+previous_df <- STAR
+
+previous_g1 = previous_df %>% 
+  subset(select = c('gender', 'ethnicity', 'birth', 'math1',
+                    'star1', 'lunch1', 'school1', 'degree1',
+                    'ladder1', 'experience1', 'tethnicity1', 'system1', 'schoolid1')) #%>% drop_na()
+
+previous_g1 = previous_g1[!is.na(previous_g1$math1),]
+
+previous_g1 = previous_g1[!is.na(previous_g1$star1) &
+                            !is.na(previous_g1$tethnicity1) &
+                            !is.na(previous_g1$schoolid1) &
+                            !is.na(previous_g1$experience1) &
+                            !is.na(previous_g1$math1)
+                          ,]
+
+previous_df_grouped_by_teacher = previous_g1 %>% 
+  group_by(experience1, tethnicity1, schoolid1, star1) %>% 
+  summarise(observations = n())
+
+previous_g1 = suppressMessages(anti_join(previous_g1, previous_df_grouped_by_teacher[previous_df_grouped_by_teacher$observations==1,]))
+
+previous_df_grouped_by_teacher = previous_df_grouped_by_teacher %>% ungroup %>% mutate(
+  teacher_id = row_number())
+
+previous_g1 = previous_g1 %>% merge(previous_df_grouped_by_teacher) #%>% subset(select = -c(full_teacher_id)))
+
+previous_summary_stats_by_teacher = previous_g1 %>% 
+  group_by(teacher_id, school1) %>% 
+  summarise(avg_math_score = mean(math1), 
+            med_math_score = median(math1),
+            sd_math_score = sd(math1),
+            observations = n())
+
+previous_summary_stats_by_teacher = previous_summary_stats_by_teacher %>% merge(previous_df_grouped_by_teacher) 
+
+previous_fitted_model = aov(avg_math_score ~ star1 + schoolid1, data = previous_summary_stats_by_teacher)
+
+df <- read.spss('STAR_Students.sav', to.data.frame=TRUE)
+
+# Keep only important columns
+
+df = df %>% subset(select = c('stdntid', 'gender', 'race', 'birthyear', 
+                              'birthmonth', 'gktmathss', 'gkclasstype', 
+                              'g2tmathss', 'g2classtype', 'g1tmathss', 'g1classtype', 'g3tmathss', 'g3classtype',
+                              'g1schid', 'g1tchid', 'g1trace', 'g1tyears', 
+                              'g1surban', 'g1thighdegree', 'g1tyears', 'g1freelunch'))
+
+# Goal is to analyze math scores for grade 1. Hence we remove students who do not have the scores.
+
+g1 = df[!is.na(df$g1tmathss),]
+
+nrow(g1)
+
+nrow(g1[!is.na(g1$g1tchid),])
+
+# There are no subjects remaining whose teacher ID is unspecified, hence we do not worry about removing them.
+
+nrow(previous_g1)
+
+# This dataset has 41 more students than previous dataset because previous dataset had students with unidentifiable teacher ID.
+
+g1$g1schid = as.factor(g1$g1schid)
+
+df_grouped_by_teacher <- g1 %>% group_by(g1tchid, g1classtype, g1schid) %>% summarise(avg_score = mean(g1tmathss), observations = n())
+
+fitted_model = aov(avg_score ~ g1classtype + g1schid, data = df_grouped_by_teacher)
+
+g1 = g1 %>% subset(select = -c(g1tyears.1))
+```
+
+***
+
+# Abstract
+
+We use the Project STAR dataset to determine whether there are differences in math scaled scores across different class sizes (interchangeably referred to as class types throughout the paper). We begin by reviewing the data collection and experimental design procedures employed, offering both criticism and praise for certain decisions made by the authors of Project STAR. We then analyze the data, focusing particularly on the relationship that certain other confounding variables outside of class size may have with test scores.
+
+We then fit a mixed effects ANOVA model and conclude that there is indeed a relationship between test scores and class sizes, with students in small classes performing better than those in regular classes, even after taking numerous other confounding variables into account. We then address the validity of our model, confirming the assumptions underlying ANOVA have been met. Lastly, we conclude by emphasizing the strong relationship between class types and test scores, and discuss potential ways in which the descriptive and inferential analysis conducted may be translated to prescriptions for educational departments around the world.
+
+# Introduction
+
+Nelson Mandela once said "Education is the most powerful weapon which you can use to change the world." 
+
+Equipped with any powerful weapon, one should be in constant consideration of opportunities to sharpen and improve it. In this case, if the weapon in question is the education system, it makes sense to consider ways in which education can be improved and made more efficient. To this end, a natural question which frequently arises is whether reduction of class sizes or student-to-teacher ratio has a positive impact on student performance and development. This question has been pondered throughout history, even dating black to recommendations that classic bible study classes should be limited to beneath 25 students.
+
+This paper aims to use the Project STAR dataset, collected and curated by the Tennessee State Department of Education and classical statistical methods (ANOVA) to answer the following questions:
+
+1. Are There Differences in Math Scaled Scores Across Class Types?
+2. Does One Class Size Have Higher Test Scores than the Rest?
+
+The implications of definitive answers to these questions are numerous. Class-size reduction (CSR) is a generally a costly and resource-intensive procedure that schools should not implement if the benefits are non-existent, as the resources required to implement CSR could then be better spent elsewhere. But if benefits do exist, then it makes sense that schools should be steadfast in obtaining the resources necessary to implement such policies.
+ 
+# Background 
+
+By May of 1985, numerous studies on the impact of class-size reduction and reduced pupil-teacher ratios on student achievement had been published, with promising results in favor of both initiatives. But limitations of the studies meant that none of the results were conclusive. The need for a well-designed study of class size was clear, as class size reduction and pupil-teacher ratio reduction are too costly of initiatives to undertake without more confidence in their benefits. Hence, Tennessee Legislature authorized and funded Project STAR: A major policy study to analyze the effects of class size on students in primary (K-3) grades.
+
+The legislation required that Project STAR aimed to answer 3 major questions:
+
+1. What are the effects of a reduced pupil-teacher ratio on the achievement and development of students in public elementary schools, grades K-3?
+2. Is there a cumulative effect of being in a small class over an extended time as compared with a one-year effect for students in a small class for one year?
+3. Does a training program designed to help teachers take maximum advantage of small classes help?
+
+The Tennessee State Department of Education led a rigorous undertaking to answer these questions, as well as other secondary questions of interest, collecting data over the course of several years.
+
+## Data Summary
+
+As required by the legislation, the target population was a diverse collection of Tennessee School Systems with K-3 classes which represented different geographic regions, the communities of which could be classified as one of inner city, suburban, urban, or rural. All Tennessee School Systems with K-3 classes were invited by The Commissioner of Education to participate, and 79 ultimately did; 17 came from inner city communities, 16 from suburban communities, 38 from rural communities, and 8 from urban communities. Hence, the sampling mechanism was not entirely random; schools were all offered the chance to participate. 
+
+From these 79 schools, 329 classes of different sizes were constructed. A power test conducted by researchers showed it would be plausible to detect a small achievement difference (3% or more) with only 80 classes of each type; 240 total classes. Hence, the number of classes constructed ensured the study was robust to the potential attrition of schools who could not continue the program.
+
+Moreover, in order to quantify the potential influence of the Hawthorne Effect (the naturally occurring phenomena of subjects behaving differently under the knowledge that they are being studied) skewing results for the schools participating in Project STAR, researchers developed a control group of 22 schools with 51 regular sized classes.
+
+The Tennessee State Department of Education, led by Elizabeth Word, Project STAR Director, then led a comprehensive data collection plan, assigning identification numbers to schools, teachers, and students who participated in Project STAR, with the goal of conducting a longitudinal analysis of the performance of individual students for four years. Information collected included, but was not limited to:
+- Scores on the Stanford Achievement Test (SAT) and Tennessee's Basic Skills First Test (BSF)
+- Student and teacher demographics (race, sex, age, etc.)
+- School location (urban, rural, inner-city, or suburban)
+
+Additionally, students in comparison schools were also assigned identification numbers, and information about their race, sex, age, free or reduced lunch, and test scores were collected. 
+
+The study employed a within-school design to minimize variation in student achievement that could be attributed to school-specific factors. This ensured that each class type (small, regular, and regular + aide) within a school shared common elements such as students, curriculum, and administration, enhancing the internal validity by controlling for school effects. Moreover, within each school, the assignment of students and teachers to each class type was completely random, ensuring that there would be no basis for the argument that higher-performing students or teachers were placed within particular class types in order to skew the results of the study. 
+
+The project was initially implemented with the goal of being a longitudinal study
+
+## Experimental Design of Project STAR
+
+Researchers employed ANOVA procedures to answer the major questions of the study which we previously listed. Data were aggregated to the level of class means.
+
+The following variables were incorporated in the following manner:
+
+1. Class Type was modeled as a fixed effect. (As is the case in our study, differences in scores across class types was the primary focus of their investigation.)
+2. School Type was modeled as a fixed effect.
+3. Schools were treated as a random effect, nested within locations and crossed with class type.
+4. Classes were treated as a random dimension.
+5. Students were treated as a random sample, nested within each class. 
+
+The design of the ANOVA model itself was not overly technical, but the robust data collection process in which the researchers identified and remediated several potential caveats of the study, ensuring their data very closely met the assumptions made by the sufficiently elegant model that they fit, was frankly groundbreaking, and deserves the praise with which it has generally been met.
+
+### Criticism of Experimental Design
+
+However, we present a criticism of what we believe to be a hole in the otherwise excellent model design: $\textbf{The aggregation strategy}$. In particular, there are two significant issues with this decision.
+
+#### Assumption of Homoskedasticity of Student Performance Across Classes
+
+First and foremost, note that even under the assumption of homoskedasticity of overall student performance, the assumption of homoskedasticity of student performance across classes is immediately violated by the simple fact that some classes have more students than others. With all variances equal across individual students, the variance in the mean test score of a class of 26 students will be half the variance in the mean test score of a class of 13 students. Additionally, aggregating scores at the class level may introduce artificial imbalance by placing more weight on the grades of students whose teachers had fewer students in their class.
+
+To visualize another way in which this assumption may be violated, consider one class - perhaps a class in an urban community - which features students from varied socio-economic statuses, who therefore have different levels of educational support at home, and come from cultures which place different levels of emphasis on academic achievement. By contrast, consider another class - perhaps one in an inner-city community - which almost entirely contains students of lower socio-economic status. Finally, consider a class in a suburban community which almost entirely contain students of higher socio-economic statuses. In this case, we expect to see higher variance in the first class considered than we do in the latter two. In our descriptive analysis, we show the data provides evidence of such scenarios occurring in practice.
+
+#### Masking the Range of Diversity and Individual Achievements Within a Class
+
+Moreover, by reducing the data to a single metric per class, the authors are not only prone to making the faulty assumption of homoskedasticity across classes; they are also prone to masking the range of diversity and individual achievements within that class. This overlooks the way that different students may respond to factors like class size, and obscures the insights that can be gained from the complex interactions between class size and student performance. This is less of a problem for the ANOVA model itself, and more of a problem for the interpretability and granularity of the results, but is still a problem nonetheless.
+
+Arguably tantamount to the violation of crucial ANOVA assumptions is the abstraction of most or all variance that we may wish to capture at the student level. For example, if one were to consider the impact of a confounding variable such as race (which we do) on test scores, there would be no easy way to incorporate such a variable in a model which aggregates the data to the level of class means. One could perhaps add "proportion of students of a certain race" as a confounding variable at the class level, but this workaround is far from optimal. 
+
+#### Summary of Criticisms
+
+Lastly, we acknowledge that there also is justification for aggregating data to the level of class means; fitting the model at the student level (without other considerations) assumes all teachers are the same, which may also be faulty. (We handle this assumption by including teachers as a random effect). Our primary criticism lies not with the final decision of the researchers, but rather, their justification (or lack thereof) for their decision. Indeed, the authors stated class means were used as the unit of analysis in order to "reduce the magnitude of statistical computations" and did not thoroughly discuss other options. This may have been relevant over 30 years ago, but is not relevant today.
+
+# Descriptive Analysis 
+
+Below, we describe and analyze our dataset, starting with a brief summary of some key variables that we plan to analyze.
+
+## Univariate Descriptive Statistics
+
+The variables which will be relevant to our analysis in some form are class size, race, lunch status, location, school location, and scaled math score. We display charts below, which summarize each of these variables, as well as gender (which we show strictly for the purpose of noting it is approximately balanced.)
+
+```{r, echo = FALSE, fig.height = 4}
+
+library(gtsummary)
+
+#g1 %>% subset(select = c(g1classtype, g1trace, g1freelunch, g1tmathss)) %>% tbl_summary %>% tbl_butcher()
+
+summary(g1 %>% subset(select = c(g1classtype, g1trace, g1freelunch, g1tmathss, gender, g1surban)))
+
+```
+
+Below, we display these statistics in chart form for easy visual interpretation:
+
+```{r, echo = FALSE, fig.width=13, fig.height=6, fig.align="center"}
+
+par(mfrow = c(2,3))
+
+barplot((table(g1$g1classtype)), xlab = 'Class Size', ylab = 'Observations', 
+        main = 'Distribution of Class Sizes', col = 'blue')
+
+barplot((table(g1$g1trace)), xlab = "Student's Race", ylab = 'Observations', 
+        main = "Distribution of Student's Race", col = 'blue')
+
+barplot((table(g1$g1freelunch)), xlab = 'Lunch Status', ylab = 'Observations', 
+        main = 'Proportion of Free Lunch Status', col = 'blue')
+
+barplot((table(g1$g1surban)), xlab = 'School Location', ylab = 'Observations', 
+        main = 'Proportion of School Locations', col = 'blue')
+
+barplot((table(g1$gender)), xlab = 'Gender', ylab = 'Observations', 
+        main = 'Proportion of Students by Gender', col = 'blue')
+
+hist(g1$g1tmathss, col = 'blue', main = 'Scaled Math Score Distribution',
+     xlab = 'Scaled 1st Grade Math Score', ylab = 'Observations')
+```
+
+Note that class size and lunch status are roughly evenly distributed across all possible factor levels, indicating roughly balanced design. Moreover, race is predominantly white, secondarily black, and there are almost no students of other race. Lastly, the distribution of scaled math scores is appears roughly normal.
+
+## Multivariate Descriptive Statistics
+
+Now, we analyze the relationship between average math scores and other key variables of interest, starting with our primary variable of interest: Class Size. 
+ 
+```{r, echo = FALSE, fig.width = 10, fig.align='center'}
+
+boxplot(g1tmathss ~ g1classtype, data = g1,
+        main = 'Math Scores by Class Size', xlab = 'Class Size', ylab = 'Math Score',
+        col = 'blue')
+
+```
+
+Indeed, small classes had higher scores, but it is difficult to determine from the visual whether the difference is significant.
+
+### Relationships Between Test Scores, Race, and other Covariates
+
+As we are strictly interested in the influence which class size has on test scores, it is crucial that we analyze the relationship between test scores and other covariates; we do not want to erroneously ascribe any effects to test scores that should actually be ascribed to other factors.
+
+It is often noted that different races are associated with different test scores. Given that race may accurately serve as a proxy for many other confounding variables (socio-economic status, cultural emphasis placed on location, etc.), we first analyze the relationship between race and test scores, and if a relationship appears to exist, we consider how this relationship is adjusted in light of other information.
+
+Due to the low proportion of students who are not identified as black or white, we focus on exclusively these two races. We begin by plotting their average 1st grade math scores:
+
+```{r, echo = FALSE}
+
+g1_black_and_white = g1[g1$race=='BLACK' | g1$race=='WHITE',]
+
+g1_black_and_white$race = as.character(g1_black_and_white$race)
+
+boxplot(g1tmathss ~ race, data = g1_black_and_white,
+        main = 'Math Scores by Race', xlab = 'Race', ylab = 'Math Score',
+        col = 'blue')
+
+```
+
+At first glance, it appears that white students perform higher. 
+
+To further investigate this claim, we must investigate the relationship between race and another key covariate: school location. It is reasonable to assume that students in inner-city communities appear to perform than students elsewhere, and we expect such communities to feature more black students than other communities.
+
+```{r, echo = FALSE}
+suppressMessages(library(ggplot2))
+suppressMessages(library(reshape2))
+
+freq_table <- table(g1_black_and_white$race, g1_black_and_white$g1surban)
+
+melted_freq_table <- melt(freq_table)
+
+ggplot(melted_freq_table, aes(Var1, Var2, fill = value)) + 
+  geom_tile() +
+  scale_fill_gradient(name = 'Students', low = "white", high = "blue") +
+  xlab("Student Race") +
+  ylab("School Location") +
+  ggtitle("Student Frequency by Race and Location")
+```
+
+As the chart shows, black students were far more prevalent in inner-city communities, while whites were far more prevalent in all other communities. Students in inner-city communities are prone to socio-economic effects which could lead them to score worse. We are at risk of falling victim to Simpson's Paradox without considering the relationship between these two. We begin doing so by scrutinizing the claim that students in inner-city communities perform worse.
+
+```{r, echo = FALSE}
+
+boxplot(g1tmathss ~ g1surban, data = g1,
+        main = 'Math Scores by School Location', xlab = 'School Location', ylab = 'Math Score',
+        col = 'blue')
+
+```
+
+Indeed, students in inner city locations scored far and away the worst.
+
+Now, we analyze test scores of black and white students within each location, in order to account for this potentially confounding variable that may be skewing the effects of race:
+
+```{r, echo = FALSE}
+
+ggplot(g1_black_and_white[!is.na(g1_black_and_white$g1surban),], aes(x = g1surban, y = g1tmathss, fill = race)) +
+  geom_boxplot() +
+  facet_wrap(~race) +
+  labs(title = "Test Scores by Race and Location Type",
+       x = "Race",
+       y = "Test Score") +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal()
+
+```
+
+Even within each school location, the difference in test scores between the two races may be slightly less, but still appears to be significant. This indicates that the confounding variable of school location, at least on its own, does not sufficiently explain the discrepancy in test scores between black and white students. 
+
+However, among students of both races, the trend of inner-city students scoring worse is prevalent among both black and white students. We now have evidence to support the following hypothesis: **External factors which reduce test scores may apply to black students more frequently than to white students.**
+
+Next, we consider another possible confounding variable: Free lunch status. Even within school districts, black students may be of lower socioeconomic status, which may influence their test performance in other manners. 
+
+To scrutinize this claim, we first check to see whether students with free lunch status score substantially worse than those without:
+
+```{r, echo = FALSE}
+
+boxplot(g1tmathss ~ g1freelunch, data = g1,
+        main = 'Math Scores by Free Lunch Status', xlab = 'Lunch Status', ylab = 'Math Score',
+        col = 'blue')
+
+```
+
+Indeed, students with free lunch score substantially worse than those without. Thus, it makes sense to check whether black students have free lunch more often than white students do.
+
+```{r, echo = FALSE}
+suppressMessages(library(ggplot2))
+suppressMessages(library(reshape2))
+
+freq_table <- table(g1_black_and_white$race, g1_black_and_white$g1freelunch)
+
+melted_freq_table <- melt(freq_table)
+
+ggplot(melted_freq_table, aes(Var1, Var2, fill = value)) + 
+  geom_tile() +
+  scale_fill_gradient(name = 'Students', low = "white", high = "blue") +
+  xlab("Student Race") +
+  ylab("Free Lunch") +
+  ggtitle("Student Frequency by Race and Free Lunch Status")
+```
+
+Indeed, nearly all black students have free lunch, while most white students do not. 
+
+Again, at the caution of avoiding Simpson's Paradox, we analyze test scores among black and white students with and without free lunch:
+
+```{r, echo = FALSE}
+
+ggplot(g1_black_and_white[!is.na(g1_black_and_white$g1freelunch),],
+       aes(x = g1freelunch, y = g1tmathss, fill = race)) +
+  geom_boxplot() +
+  facet_wrap(~race) +
+  labs(title = "Test Scores by Race and Location Type",
+       x = "Race",
+       y = "Test Score") +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal()
+
+```
+
+Within both lunch groups, white students do have higher test scores. But the difference does not appear nearly as large as the difference was before separating students by lunch status; black students with non-free lunch actually appear to have roughly the same average test scores as white students with free lunch, with a touch higher variance.
+
+Moreover, a key trend from the analysis of the relationship between school location and test scores persists: Within both races, students with free lunch scored worse than those without. This is more supporting evidence that black students are more prone to external factors which reduce test scores than white students are. 
+
+Based on the charts we have seen, one may reasonable argue that after accounting for a satisfactory number of confounding variables (the set of which would likely include school location and lunch status), the relationship between race and test scores would be further diminished or even disappear entirely. However, by the principle of parsimony, we choose simply to incorporate race in our final model, noting that race may accurately proxy for numerous other covariates that may obscure the influence of class type on test scores. 
+
+We emphasize that our claim here is not that race inherently has a negative effect on test scores; far deeper analysis on race than we have conducted or will conduct in this paper is necessary to support such a claim. Our claim is actually that other factors which reduce test scores are likely to be associated more frequently with one racial group than another, and we are simply including race as a proxy for these factors. 
+
+## Heteroskedasticity Across Classes
+
+Recall that in our review of the experimental design of project STAR, we argued that the assumption of homoskedasticity of student performance across classes was faulty. We presented the example of a class in an urban community which featured students from varied socio-economic statuses, and argued that such a class would likely see higher variance in their test scores than a class in a suburban or inner city community which featured mostly students from one particular socio-economic class.
+
+To analyze the possible validity of this claim, we looked at the variance in math scores in each classroom, and then took the average of these variances across the dimension of school location. Our results are shown below:
+
+```{r, echo = FALSE}
+
+tmp = suppressMessages(g1 %>% group_by(g1tchid, g1surban) %>% 
+  summarise(var_math_score = var(g1tmathss)) %>% 
+  group_by(g1surban) %>% summarise(avg_var_math_score = mean(var_math_score)))
+
+ggplot(tmp, aes(x=g1surban, y=avg_var_math_score, fill=g1surban)) +
+  geom_bar(stat="identity") +
+  theme_minimal() +
+  labs(x="School Location", y="Average in-Class Variance of Math Scores", 
+       title="Average in-Class Variance of Math Scores by Location") +
+  scale_fill_brewer(palette="Pastel1") 
+
+```
+
+On average, inner-city schools see far more variance in student performance than suburban or inner-city schools, indicating a potential violation of homoskedasticity of student performance across classes. 
+
+We dive deeper into the data, generating the same plots for each respective class size:
+
+```{r, echo = FALSE, fig.width = 14}
+tmp <- g1 %>% 
+  filter(g1classtype == 'REGULAR CLASS') %>%
+  group_by(g1tchid, g1surban) %>% 
+  summarise(var_math_score = var(g1tmathss, na.rm = TRUE), .groups = 'drop') %>%
+  group_by(g1surban) %>%
+  summarise(avg_var_math_score = mean(var_math_score, na.rm = TRUE))
+
+p1 <- ggplot(tmp, aes(x=g1surban, y=avg_var_math_score, fill=g1surban)) +
+  geom_bar(stat="identity") +
+  theme_minimal() +
+  labs(x="School Location", y="Average in-Class Variance of Math Scores") +
+  scale_fill_brewer(palette="Pastel1")
+
+tmp <- g1 %>% 
+  filter(g1classtype == 'REGULAR + AIDE CLASS') %>%
+  group_by(g1tchid, g1surban) %>% 
+  summarise(var_math_score = var(g1tmathss, na.rm = TRUE), .groups = 'drop') %>%
+  group_by(g1surban) %>%
+  summarise(avg_var_math_score = mean(var_math_score, na.rm = TRUE))
+
+p2 <- ggplot(tmp, aes(x=g1surban, y=avg_var_math_score, fill=g1surban)) +
+  geom_bar(stat="identity") +
+  theme_minimal() +
+  labs(x="School Location", y="Average in-Class Variance of Math Scores", 
+       title="In-Class Variance: Math Scores") +
+  scale_fill_brewer(palette="Pastel1")
+
+tmp <- g1 %>% 
+  filter(g1classtype == 'SMALL CLASS') %>%
+  group_by(g1tchid, g1surban) %>% 
+  summarise(var_math_score = var(g1tmathss, na.rm = TRUE), .groups = 'drop') %>%
+  group_by(g1surban) %>%
+  summarise(avg_var_math_score = mean(var_math_score, na.rm = TRUE))
+
+p3 <- ggplot(tmp, aes(x=g1surban, y=avg_var_math_score, fill=g1surban)) +
+  geom_bar(stat="identity") +
+  theme_minimal() +
+  labs(x="School Location", y="Average in-Class Variance of Math Scores") +
+  scale_fill_brewer(palette="Pastel1")
+
+suppressMessages(require(gridExtra))
+
+grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+The pattern holds for all 3 classes, with the exception of slightly higher average variance in urban math courses than in rural math courses.
+
+This evidence supports the decision we will make in [Inferential Analysis] to fit the model at the student level.
+
+## Noncompliance: Were Students Allowed to Switch Classes? Are there Trends Among Students who Switched Class Sizes?
+
+As mentioned, Project STAR was meant to be a longitudinal study of the effect of class sizes, the STAR consortium initially mandated that students assigned to one class size were to remain in that class size for all following grades.
+
+It is unclear exactly to what degree this mandate was followed. The authors of the STAR Technical Report make the following statement after mentioning the mandate:
+
+"Due primarily to teacher-identified discipline problems and some parent complaints, the STAR consortium had to revise this procedure after the kindergarten year. Since there were no differences on any measure for students in regular and regular with aide classes, students who had been in these class types in kindergarten were reassigned randomly within the two class types for first grade. The external advisory committee informed STAR that this interchanging could create problems in conducting longitudinal analysis. Therefore, first grade was the only grade in which students in regular and regular with aide classes were permitted to interchange. No further changes were made after first grade."
+
+The plot below, which shows the year-over-year paths followed by students who were enrolled in the program for all 4 years, shows this not to be entirely correct:
+
+```{r fig.height=5, fig.width=5, include=FALSE, echo = FALSE}
+library(multcompView)
+library(naniar)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(MASS)
+library(car)
+library(nortest)
+library(stats)
+library(AER)
+library(visdat)
+library(plotly)
+library(data.table)
+library(devtools)
+library(ggsci)
+```
+
+```{r alluvial plot, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=4, fig.align="center", echo = FALSE}
+data("STAR")
+# Load data with some variables we are interestied in 
+columns_long <- c("gender", "birth", "stark","star1", "star2", "star3", "mathk","math1", "math2", "math3", "schoolk","school1", "school2", "school3", "degree1", "degree2", "degree3", "ladder1", "ladder2", "ladder3", "experience1", "experience2", "experience3", "schoolid1", "schoolid2", "schoolid3", "system1", "system2", "system3")
+data_long <- STAR[, columns_long]
+
+# Drop Missing Values
+nona_long=na.omit(data_long)
+
+# Count how many student enrolls in each combination of class types for 3 years
+alluvialdata <- nona_long %>% group_by(stark,star1, star2, star3) %>%summarise(Freq = n())  
+
+# Construct new variables
+alluvial_data <- as.data.frame(alluvialdata)
+alluvial_data <- alluvial_data %>%
+  mutate(
+    stark=paste0(stark,'_k'),
+    star1=paste0(star1,'_1'),
+    star2=paste0(star2,'_2'),
+    star3=paste0(star3,'_3')
+  )
+# Set color for streams (links) in the alluvial diagram  
+alluvial_data$color = c(rep('lightblue',19), rep('salmon',14), rep('lightgray',20))
+
+# Data classification and rename columns
+
+alluvial_data_k <- alluvial_data[,c(1,2,5,6)]
+alluvial_data_k <- alluvial_data_k %>% rename(source = stark, target = star1)
+
+
+alluvial_data_1 <- alluvial_data[,c(2,3,5,6)]
+alluvial_data_1 <- alluvial_data_1 %>% rename(source = star1, target = star2)
+
+alluvial_data_2 <- alluvial_data[,3:6]
+alluvial_data_2 <- alluvial_data_2 %>% rename(source = star2, target = star3)
+
+# Combine the data into one dataframe
+sankeydata <- rbind(alluvial_data_k,alluvial_data_1, alluvial_data_2)
+sankeydata <- data.table(sankeydata)
+combined_sank = rbind(sankeydata[1:53,lapply(.SD,sum), by=list(source, target, color)], sankeydata[54:106,lapply(.SD,sum), by=list(source, target, color)],sankeydata[107:159,lapply(.SD,sum), by=list(source, target, color)])
+
+
+```
+
+```{r, echo = FALSE}
+# Create Links
+links <- combined_sank
+# Convert links as character
+links$source <- as.character(links$source)
+links$target<- as.character(links$target)
+
+# Create nodes based on links
+nodes <- data.frame(name = unique(c(links$source, links$target)))
+
+# More clean-up
+links$source <- match(links$source, nodes$name) - 1
+links$target <- match(links$target, nodes$name) - 1
+
+```
+
+```{R, echo = FALSE}
+
+library(plotly)
+
+# Assuming these are the JCO colors you want to use
+jco_colors <- c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF")
+
+# Modified your original code to use the 'jco_colors' for the 'color' attribute in 'node'
+fig <- plot_ly(type = "sankey",
+               orientation = "h",
+               node = list(
+                 label =  c("regular", "small", "reg+aid","regular", "small", "reg+aid","regular", "small", "reg+aid","regular", "small", "reg+aid"),
+                 color = rep(jco_colors, each = 3),
+                 pad = 15,
+                 thickness = 20,
+                 line = list(color = "black", width = 0.5)),
+               link = list(source = links$source, # Ensure 'links' is defined elsewhere in your script
+                           target = links$target,
+                           value = links$Freq,
+                           color = links$color, # Ensure 'links$color' matches desired color logic
+                           alpha = 0.7)) %>%
+  layout(title = "Continuity of Program", font = list(size = 10))
+
+# Display plot
+fig
+
+```
+
+It seems reasonable, based on the data, that students who were either in regular or regular/aide classes in kindergarten were randomly assigned to one or the other of the two in 1st grade. Moreover, such students do make up the majority of those who switched class types.
+
+However, the claim that students were not allowed to switch classes in any other manner is patently false, as our data shows. Because there is no discussion of this in the technical report, we conclude that while reassignment of the aforementioned type may be random, any other reassignment may be due to other factors. More to the point, if students who changed classes did so because **their** parents complained, it is reasonable to assume that parental dissatisfaction may have formed as a result of poor test scores. In such a case, it would follow that the reassignment was not entirely random, and hence, we would no longer be able to assume that the treatments were given randomly to the subjects.
+
+To further scrutinize this claim, we broaden the scope of our analysis to students who attended school in any 2 consecutive years, and who were in regular or regular/aide classes in the first of the 2 years. We compare the average scores of the students who switched classes to the average score of those who did not, in the year *preceding* the switch. 
+
+```{r, echo = FALSE}
+
+t_k_1_df = df[!is.na(df$gkclasstype) & !is.na(df$g1classtype) &
+                     !is.na(df$gktmathss) & !is.na(df$g1tmathss)
+                   ,]
+
+yoy_k_1_changes = t_k_1_df %>% mutate(ct = paste0(gkclasstype, '; ', g1classtype),
+                            switch_k = ifelse(gkclasstype!=g1classtype, TRUE, FALSE))
+
+yoy_k_1_changes = yoy_k_1_changes[(yoy_k_1_changes$gkclasstype=='REGULAR CLASS') | (yoy_k_1_changes$gkclasstype=='REGULAR + AIDE CLASS'),] %>% 
+  group_by(switch_k) %>% summarise(avg_k_math_score = mean(gktmathss), switch_k_observations = n())
+
+t_1_2_df = df[!is.na(df$g2classtype) & !is.na(df$g1classtype) &
+                !is.na(df$g2tmathss) & !is.na(df$g1tmathss)
+              ,]
+
+yoy_1_2_changes = t_1_2_df %>% mutate(ct = paste0(g1classtype, '; ', g2classtype),
+                                      switch_1 = ifelse(g1classtype!=g2classtype, TRUE, FALSE),)
+
+yoy_1_2_changes = yoy_1_2_changes[(yoy_1_2_changes$g1classtype=='REGULAR CLASS') | (yoy_1_2_changes$g1classtype=='REGULAR + AIDE CLASS'),] %>% 
+  group_by(switch_1) %>% summarise(avg_1_math_score = mean(g1tmathss), switch_1_observations = n())
+
+t_2_3_df = df[!is.na(df$g2classtype) & !is.na(df$g3classtype) &
+                !is.na(df$g2tmathss) & !is.na(df$g3tmathss)
+              ,]
+
+yoy_2_3_changes = t_2_3_df %>% mutate(ct = paste0(g2classtype, '; ', g3classtype),
+                                      switch_2 = ifelse(g2classtype!=g3classtype, TRUE, FALSE),)
+
+yoy_2_3_changes = yoy_2_3_changes[(yoy_2_3_changes$g2classtype=='REGULAR CLASS') | (yoy_2_3_changes$g2classtype=='REGULAR + AIDE CLASS'),] %>% 
+  group_by(switch_2) %>% summarise(avg_2_math_score = mean(g2tmathss), switch_2_observations = n())
+
+cbind(yoy_k_1_changes, yoy_1_2_changes, yoy_2_3_changes)
+
+```
+
+Among students who switched courses after 1st or 2nd grade, their scores in the grade preceding their switch appear significantly lower. However, among those in kindergarten, the average scores of students who switched was slightly higher.
+
+One issue with this analysis is that the legitimately random reassignment of students between regular and regular/aide class types in kindergarten may be obscuring the path from kindergarten to 1st grade. Additionally, switches from regular or regular/aide to small classes may be more likely to be caused by parent complaints rather than legitimately random factors. Thus, we now consider strictly students who switched from regular or regular/aide classes to small classes, and compare them to students who remained in regular or regular/aide classes (including those who may have switched within the two).
+
+```{r, echo = FALSE}
+
+t_k_1_df = df[!is.na(df$gkclasstype) & !is.na(df$g1classtype) &
+                     !is.na(df$gktmathss) & !is.na(df$g1tmathss)
+                   ,]
+
+yoy_k_1_changes = t_k_1_df %>% mutate(ct = paste0(gkclasstype, '; ', g1classtype),
+                            switch_k_to_small = ifelse(g1classtype == 'SMALL CLASS', TRUE, FALSE))
+
+yoy_k_1_changes = yoy_k_1_changes[(yoy_k_1_changes$gkclasstype=='REGULAR CLASS') | (yoy_k_1_changes$gkclasstype=='REGULAR + AIDE CLASS'),] %>% 
+  group_by(switch_k_to_small) %>% summarise(avg_k_math_score = mean(gktmathss), switch_k_observations = n())
+
+t_1_2_df = df[!is.na(df$g2classtype) & !is.na(df$g1classtype) &
+                !is.na(df$g2tmathss) & !is.na(df$g1tmathss)
+              ,]
+
+yoy_1_2_changes = t_1_2_df %>% mutate(ct = paste0(g1classtype, '; ', g2classtype),
+                                      switch_1_to_small = ifelse(g2classtype == 'SMALL CLASS', TRUE, FALSE),)
+
+yoy_1_2_changes = yoy_1_2_changes[(yoy_1_2_changes$g1classtype=='REGULAR CLASS') | (yoy_1_2_changes$g1classtype=='REGULAR + AIDE CLASS'),] %>% 
+  group_by(switch_1_to_small) %>% summarise(avg_1_math_score = mean(g1tmathss), switch_1_observations = n())
+
+t_2_3_df = df[!is.na(df$g2classtype) & !is.na(df$g3classtype) &
+                !is.na(df$g2tmathss) & !is.na(df$g3tmathss)
+              ,]
+
+yoy_2_3_changes = t_2_3_df %>% mutate(ct = paste0(g2classtype, '; ', g3classtype),
+                                      switch_2_to_small = ifelse(g3classtype == 'SMALL CLASS', TRUE, FALSE),)
+
+yoy_2_3_changes = yoy_2_3_changes[(yoy_2_3_changes$g2classtype=='REGULAR CLASS') | (yoy_2_3_changes$g2classtype=='REGULAR + AIDE CLASS'),] %>% 
+  group_by(switch_2_to_small) %>% summarise(avg_2_math_score = mean(g2tmathss), switch_2_observations = n())
+
+cbind(yoy_k_1_changes, yoy_1_2_changes, yoy_2_3_changes)
+
+```
+
+The trend is now reversed among students who switched after kindergarten; the math scores of those who switched to small class types are indeed lower than the scores of those who did not. Interestingly, while still present, the trend is markedly weaker for students who switched after 1st or 2nd grade.
+
+This evidence does further support that reassignment of students from regular or regular/aide classes to different class types after kindergarten may have been random, but reassignment across all 3 grades from regular or regular/aide classes to small classes may not have been random.
+
+If students who scored poorly in regular or regular/aide classes in any given year were more likely to be reassigned to a small class in the following year, it follows that the less academically capable students may have been more likely to be assigned to small classes. If students who are more likely to score poor are also more likely to be assigned to small classes, and small classes are likely to improve student performance, it follows that the two may wash one another out. This selection bias could lead us to underestimate the impact of small class sizes on test scores in later years.
+
+We re-emphasize that the literature is unclear on how exactly noncompliance occurred. Additional detail from the authors regarding changes of this nature could either increase our concern or quell it entirely. However, given the data we have shown, this is a noteworthy concern, and we urge the reader to consider that this selection bias may lead us to underestimate the influence of class size on test score.
+
+## Searching for Evidence of Interactions Between Confounding Variables
+
+We check for interactions between class type and both race and school type as they pertain to test scores. Visual analysis of such plots will lead us to determine whether we should include an interaction term or not.
+
+```{r, echo = FALSE, fig.width = 10}
+
+par(mfrow = c(1,2))
+
+interaction.plot(x.factor = g1$g1classtype, 
+                 trace.factor = g1$g1surban, 
+                 response = g1$g1tmathss, 
+                 fun = mean,
+                 type = "b",    
+                 legend = TRUE,
+                 xlab = "Class Size", 
+                 ylab = "Average Scaled Math Score", 
+                 trace.label = "School Location", 
+                 main = 'Interaction Plot: Class Size & School Location Vs. Scaled Math Score',
+                 col = 'blue')
+
+interaction.plot(x.factor = g1_black_and_white$g1classtype, 
+                 trace.factor = g1_black_and_white$race, 
+                 response = g1_black_and_white$g1tmathss, 
+                 fun = mean,
+                 type = "b",    
+                 legend = TRUE,
+                 xlab = "Class Size", 
+                 ylab = "Average Scaled Math Score", 
+                 trace.label = "Race", 
+                 main = 'Interaction Plot: Class Size & Race Vs. Scaled Math Score',
+                 col = 'blue')
+
+
+```
+
+The lines in both interaction plots are essentially parallel, hence we will not include either interaction term.
+
+# Inferential Analysis 
+
+We fit the following mixed effects model:
+\[
+Y_{ijklm} = \mu + \alpha_i + \beta_j + \tau_k + \gamma_l + \epsilon_{ijklm}
+\]
+
+Where:
+
+- \(Y_{ijklm}\) is the math score for the $m$-th student in the class of $l$-th teacher of the $k$-th race, attending the $j$-th school, which is of the $i$-th class size.
+- \(\mu\) is the grand mean math score.
+- \(\alpha_i\) is the fixed effect of the \(i\)-th class size.
+- \(\beta_j\) is the fixed effect of the \(j\)-th school.
+- \(\tau_k\) is the fixed effect of the \(k\)-th race. (Due to the small amount of students of any particular race that is not black or white, we simply categorize students that are not black or white as "other.")
+- \(\gamma_l\) is the random effect of the \(l\)-th teacher, \(\gamma_l \sim N(0, \sigma^2_\gamma)\).
+- \(\epsilon_{ijklm}\) is the error term, \(\epsilon_{ijklm} \sim N(0, \sigma^2)\).
+
+This model makes the following assumptions:
+
+1. The residuals (\(\epsilon_{ijklm}\)) are independently and identically distributed as a normal distribution with mean 0 and variance \(\sigma^2\).
+2. The random effects (\(\gamma_k\) are normally distributed with mean 0 and their own variances (\(\sigma^2_\gamma\), respectively).
+3. Fixed effects and random effects are independent of the residuals.
+4. All of the variance in our data that is not explained by error terms is explained by the factor effects.
+5. There is no interaction between any of the variables listed, e.g, class type does not have a different effects on students in one school than students in another.
+
+Assumption 5 was made for several reasons. Firstly, our primary focus was to understand the direct impact which class size had on math scores; we strictly included the other variables as covariates to isolate the impact of class size, and were not concerned with the impact of those variables themselves, much less their interactions with one another and with class size.
+
+Moreover, the theoretical background and existing literature did not strongly suggest the presence of a significant interaction between class size and school type. Indeed, interaction terms were not a part of the main model originally proposed by The Tennessee State Department of Education, and the interaction plot we shared in our initial analysis did not suggest any interaction between class size and school type.
+
+```{r, echo = FALSE}
+
+suppressMessages(library(lmerTest))
+suppressMessages(library(lme4))
+
+g1 = g1 %>% mutate(simple_race = ifelse((g1$race!='BLACK' & g1$race!='WHITE') | (is.na(g1$race)), 'OTHER', as.character(g1$race)))
+
+# Fitting the model with class as a random effect
+student_level_model <- lmer(g1tmathss ~ g1classtype + simple_race + g1schid + (1|g1tchid), data = g1)
+
+fixef(student_level_model)[1:5]
+
+```
+
+The coefficient associated with regular class sizes tells us that, holding all other factors constant, shifting from a small class (the baseline in our model) to a regular class is associated with just over a 13 point drop in scaled math scores. Moreover, holding all other factors constant, shifting from a small class to a regular/aide class is associated with just over a 11 point drop in scaled math scores. At first glance, there does appear to be a substantial relationship between class type and student test scores.
+
+While we report that both coefficients associated with non-black races correspond to a roughly 25 point increase in scaled math scores, we again emphasize that these coefficients incorporate other confounding variables that we have chosen to exclude by the principle of parsimony; inclusion of such covariates may change these coefficients substantially. (For example, the inclusion of free lunch as a variable under the otherwise identical model reduces both coefficients to roughly 19.)
+
+Additionally, we provide estimates of the parameters $\sigma_\gamma\text{ and } \sigma$ (in that order) below:
+
+```{r, echo = FALSE}
+
+VarCorr(student_level_model)
+
+```
+
+
+
+## Primary Question of Interest: Are There Differences in Math Scaled Scores Across Class Types?
+
+We will use the ANOVA Type II Sum of Squares (SS) Test to determine whether there is a significant differences between test scores across students in different class sizes. The hypotheses we wish to test are as follows:
+
+- $H_0: \alpha_i = 0$ for all $\alpha_i$, i.e, all the group means are equal. 
+- $H_a: \alpha_i \neq 0$ for some i, i.e, not all group means are equal. 
+
+Our pre-specified significance level is $\alpha = 0.05$. Our p-value is shown in the first row of the table below:
+
+```{r, echo = FALSE}
+
+suppressWarnings(Anova(student_level_model, type = 'II'))
+
+```
+
+This value is substantially less than the significance level. Hence, we reject the null hypothesis, and support the alternative: at least one $\alpha_i$ is not equal to 0, i.e, at least one class size has higher average math scores among their students.
+
+## Secondary Question of Interest: Does One Class Size Have Higher Test Scores than the Rest?
+
+Because design is nearly balanced, and we are strictly interested in pairwise comparisons, we chose to answer this question using Tukey's Honest Significant Difference (HSD). The hypotheses we wish to test are as follows:
+
+- $H_0: \alpha_i$ is not greater than all $\alpha_j$, $i \neq j$, for any i, i.e, there is no class size whose teachers have significantly higher average test scores than the rest.
+- $H_a: \alpha_i > \alpha_j, \forall j \neq i$, for some i, i.e, there is a class size whose teachers have significantly higher average test scores than the rest.
+
+The test statistic is:
+
+\begin{equation}\label{eqn:tukey_hsd}
+Q_{ij} = \frac{\bar{Y}_{i.} - \bar{Y}_{j.}}{\sqrt{\frac{MSE}{n_h}}}
+\end{equation}
+
+for a pairwise contrast between groups $i$ and $j$, where $n_h$ is the harmonic mean of $n_i$ and $n_j$.
+
+Under the null hypothesis, confidence intervals for $Q_{ij}$ are derived from the Studentized Range Distribution.
+
+We reject the null hypothesis if the p-value is less than our significance level $\alpha = 0.05$ for all comparisons for a particular group, with positive coefficient estimates for said group. 
+
+```{r, echo = FALSE}
+
+suppressMessages(library(emmeans))
+
+emm <- emmeans(student_level_model, ~ g1classtype, lmerTest.limit = 6598, pbkrtest.limit = 6598)
+
+pairs_emm <- pairs(emm, adjust = "tukey")
+
+summary(pairs_emm)
+
+```
+
+As we can see, the p-values associated with the difference between small and regular classes, and with the difference between small and regular/aide classes, is far less than our significance level $\alpha = 0.05$. Hence, we reject the null hypothesis, and support the alternative at the significance level $\alpha = 0.05$: small class sizes have significantly higher scores than other class sizes.
+
+## Visualizing Answers to Questions of Interest
+
+We generate the main effects plot for math scores at the student level:
+
+```{r, echo = FALSE, fig.height = 4}
+
+suppressMessages(library(gplots))
+suppressWarnings(plotmeans(g1tmathss ~ g1classtype, data = g1,
+          main = "Main Effects Plot: Average Math Score By Class Size",
+          xlab = 'Class Size',
+          ylab = 'Average Math Score'))
+
+```
+
+The main effects plot displays a clear difference in average math scores between teachers of different sized classes. Now, we visualize 95% family-wise confidence intervals (via Tukey's test) for the difference in means across different class sizes:
+
+```{r, echo = FALSE, fig.height = 4}
+
+plot(pairs_emm)
+
+```
+
+## Addressing a Potential Criticism of our Experimental Design
+
+One possible criticism of fitting the model at the student level is that, due to peer influences, students may depend not only on the treatments to which they were assigned, but also the treatments to which their peers were assigned, thereby violating the assumption of stable unit treatment (SUTVA).
+
+We acknowledge this criticism, but argue that our model's structure allows us to operate under a version of SUTVA that is conditional on the class effects. After conditioning on the class effects, the remaining assumption is that the treatment assigned to any particular student does not spill over or affect the outcomes of other students within the same class. This assumption is reasonable because class-level random effects already account for the shared variance among students in the same class, which incorporates the effects of shared environment and potential peer influences.
+
+# Sensitivity analysis 
+
+We begin our sensitivity analysis through subjective analysis of various diagnostic plots.
+
+```{r, echo = FALSE}
+
+grid.arrange(p1, p2, ncol = 2)
+
+p1 = plot(student_level_model, which = 1)
+
+```
+
+The residual Vs. Fitted Values plot looks quite reasonable, and there is no evidence of heteroskedasticity. However, the massive number of observations may obscure any possible trends. 
+
+```{r, echo = FALSE}
+
+qqnorm(scale(residuals(student_level_model)))
+qqline(scale(residuals(student_level_model)))
+
+```
+
+
+The residuals look slightly heavy in the tails, but only for a few extreme points at both ends. Otherwise, it appears our data meets the assumption of normality quite well. 
+
+We avoid testing for normality, as with a sample size of over 6,000, the Shapiro-Wilk Test is not reasonable.
+
+## Testing for Homoskedasticity
+
+We use the Levene test to test for equal variance of errors across different class sizes to test the following hypotheses:
+
+- $H_0: \sigma^2_1 = \sigma^2_2 = \ldots = \sigma^2_k$, i.e, variance across class sizes are all equal.
+- $H_a: \exists \, i, j \, : \, \sigma^2_i \neq \sigma^2_j$, i.e, variance across class sizes are not all equal.
+
+We reject the null hypothesis if the p-value is less than the significance level $\alpha = 0.05$, and fail to reject otherwise.
+
+```{r, echo = FALSE}
+
+g1 = g1 %>% mutate(fitted_values = fitted(student_level_model),
+              residuals = residuals(student_level_model))
+
+leveneTest(residuals ~ g1classtype, data = g1)
+
+```
+
+The p-value is greater than our pre-specified significance level, hence we fail to reject the null hypothesis; there is insufficient evidence to support the claim that variance across class sizes are not equal. 
+
+## (Informally) Testing for Normality of Errors
+
+Our sample size of over 6,500 means tests such as the Shapiro-Wilk Normality Test may not apply to our data. Moreover, similar tests which have been adapted to work for such large datasets will be extremely sensitive to reject the null hypothesis.
+
+As such, we informally "test" for the normality of our errors by computing skewness and kurtosis. Skewness near 0 indicates the data is centered, while kurtosis near 3 indicates the distribution is similar to the normal distribution in terms of the weight of its tails. 
+
+``` {r, echo = FALSE}
+library(moments)
+skewness(g1$residuals)
+kurtosis(g1$residuals)
+```
+
+The values observed are very close to the numbers we mentioned, indicating we may safely assume our data is approximately normal.
+
+# Discussion 
+
+This report analyzed the Project STAR dataset with the goal of determining whether different class sizes were assigned with different test scores, and if so, if one particular class size was associated with the highest test scores. 
+
+Thorough, rigorous analysis of our dataset and the relationship between our response variable and numerous other confounding variables led us to fit a mixed effects ANOVA model at the student level, using class type as our primary predictor variable of interest, school ID and race as other fixed effects, and teacher ID (serving as a proxy for class) as a random effects. 
+Upon fitting the model, we found a statistically significant relationship between class size and test scores. More specifically, we found that small class sizes were indeed associated with statistically significantly higher test scores than regular classes or regular classes with an aide. Rigorous diagnostic tests on the outputs generated by our model showed sufficient evidence that our model meets the necessary assumptions for such a mixed ANOVA model.  
+
+We touch on this in [Relationships Between Test Scores, Race, and other Covariates], and touch on it further in [Caveats of Our Analysis], but we urge any future studies to collect more information that may be associated with higher or lower test scores, which may include but not be limited to student's parents' highest degree(s), or household income. Such information would allow us to more accurately determine which other confouding variables influence test scores, which would further enrich any analysis. 
+
+While we would like to make various suggestions regarding policy, it is difficult to do so without specification of the opportunity cost of such decisions. The researchers behind Project STAR state that there "was an appropriation of $3,000,000 for the first year of the four-year study." While some of the expenses may have been attributable to other aspects of the study, it is still clear that class size reduction is quite costly. There may be other more optimal ways in which such a large sum of money can be spent on improving student test performance. However, if the cost of class-size reduction is similar to the cost of reduction of pupil-teacher ratio, then the results of our analysis appear sufficient to recommend class-size reduction as the better choice between the two.
+
+Further studies may look into the merits of excluding students who changed class types in any year.
+
+## Caveats of Our Analysis
+
+Lastly, we re-emphasize numerous caveats identified in various portions of our analysis:
+
+1. $\textbf{Noncompliance}$: As mentioned in [Noncompliance: Were Students Allowed to Switch Classes? Are there Trends Among Students who Switched Class Sizes?], the assignment of students to different class types may not have been entirely random. There exists both data-driven evidence and reasonable intuition to support the hypothesis that a portion of students who were assigned to small classes in 1st, 2nd, and 3rd grade were students that were inherently more likely to score lower for whatever reason. As such, our report may actually have underestimated the degree to which assignment to small classes can be expected to improve student performance. In the absence of more knowledge of why exactly students switched to small class types, our concern looms, but we note that the influence of this selection bias and only applies to is likely small subset of the population if it does exist.
+
+2. $\textbf{Lack of Ideal Covariates}$: As mentioned in [Relationships Between Test Scores, Race, and other Covariates], we chose to fit our final model using race as a fixed effect, citing its relationship between test scores and other covariates that also appear related to test scores. The thought process behind doing so was that race may serve as a proxy for other key covariates that were not present, such as socio-economic status and cultural importance of education among friends and family members. If we had access to the students' household income, and/or the highest level of education attained by either of their parents, incorporating such variables in our final model may help us more accurately isolate the influence of class type on scaled math scores. However, because we already identified a very significant relationship, and assignment of class types was random it is unlikely that this would have any impact on our conclusion as it pertained to the relationship between class size and test scores. It may, however, change the observed relationship between race and test scores.
+
+3. $\textbf{Potential Violation of SUTVA}$: As mentioned in [Inferential Analysis], one possible criticism of fitting the model at the student level is that, due to peer influences, students may depend not only on the treatments to which they were assigned, but also the treatments to which their peers were assigned, thereby violating the assumption of stable unit treatment (SUTVA). We offered a rigorous argument that our decision was preferable to fitting the model at the teacher-level, and added that we were operating under a version of SUTVA that is conditional on the class effects, but we acknowledge that the argument that this assumption may technically be violated.
+
+# Acknowledgement {-}
+
+I worked with Jingzhi Sun on this project. In particular, code for the Sankey plot used in [Noncompliance: Were Students Allowed to Switch Classes? Are there Trends Among Students who Switched Class Sizes?] was strictly developed by Jingzhi.
+
+# Reference {-}
+
+Finn, J. D., & Achilles, C. M. (1999). Tennessee's Student Teacher Achievement Ratio (STAR) Project: Technical Report 1985-1990, Part I. Retrieved from https://www.classsizematters.org/wp-content/uploads/2016/09/STAR-Technical-Report-Part-I.pdf
+
+# Session info {-}
+
+```{r, echo = FALSE}
+sessionInfo()
+```

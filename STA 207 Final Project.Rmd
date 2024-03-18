@@ -1,11 +1,17 @@
 ---
 title: "The Relationship Between Class Size and Test Scores: An Analysis of the Project STAR Dataset"
 author: "Patrick Bacon"
-date: "3-14-2024"
+date: "3-18-2024"
 output:
   html_document:
     df_print: paged
     number_sections: yes
+    toc: true
+    toc_float:
+      collapsed: false
+    fig_caption: true
+    pdf_document:
+      toc: true
 ---
 ```{r results = 'hide', error = FALSE, warning = FALSE, message = FALSE, echo = FALSE}
 library(foreign)
@@ -684,7 +690,7 @@ Y_{ijklm} = \mu + \alpha_i + \beta_j + \tau_k + \gamma_l + \epsilon_{ijklm}
 Where:
 
 - \(Y_{ijklm}\) is the math score for the $m$-th student in the class of $l$-th teacher of the $k$-th race, attending the $j$-th school, which is of the $i$-th class size.
-- \(\mu\) is the grand mean math score.
+- \(\mu\) is the mean math score when all other predictor variables are set to their reference levels.
 - \(\alpha_i\) is the fixed effect of the \(i\)-th class size.
 - \(\beta_j\) is the fixed effect of the \(j\)-th school.
 - \(\tau_k\) is the fixed effect of the \(k\)-th race. (Due to the small amount of students of any particular race that is not black or white, we simply categorize students that are not black or white as "other.")
@@ -892,7 +898,7 @@ Lastly, we re-emphasize numerous caveats identified in various portions of our a
 
 # Acknowledgement {-}
 
-I worked with Jingzhi Sun on this project. In particular, code for the Sankey plot used in [Noncompliance: Were Students Allowed to Switch Classes? Are there Trends Among Students who Switched Class Sizes?] was strictly developed by Jingzhi.
+I worked with Jingzhi Sun and Zichen Hu on this project. In particular, code for the Sankey plot used in [Noncompliance: Were Students Allowed to Switch Classes? Are there Trends Among Students who Switched Class Sizes?] was strictly developed by Jingzhi.
 
 # Reference {-}
 
